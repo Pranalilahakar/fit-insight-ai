@@ -47,14 +47,9 @@ def signup(email, password):
         return False
 
 def login(email, password):
-    cursor.execute(
-        "SELECT password FROM users WHERE email = ?",
-        (email,)
-    )
+    cursor.execute("SELECT password FROM users WHERE email = ?", (email,))
     result = cursor.fetchone()
-    if result and bcrypt.checkpw(password.encode(), result[0]):
-        return True
-    return False
+    return result and bcrypt.checkpw(password.encode(), result[0])
 
 # =====================================================
 # LOGIN / SIGNUP PAGE
@@ -69,7 +64,7 @@ if not st.session_state.logged_in:
     if choice == "Signup":
         if st.button("Create Account"):
             if signup(email, password):
-                st.success("Account created! Please login.")
+                st.success("Account created. Please login.")
             else:
                 st.error("User already exists.")
 
@@ -78,7 +73,7 @@ if not st.session_state.logged_in:
             if login(email, password):
                 st.session_state.logged_in = True
                 st.session_state.user_email = email
-                st.experimental_rerun()
+                st.rerun()
             else:
                 st.error("Invalid credentials")
 
@@ -88,16 +83,15 @@ if not st.session_state.logged_in:
 # SIDEBAR
 # =====================================================
 st.sidebar.title("🏋️ FitInsight AI")
-st.sidebar.caption("Gym Business Intelligence")
 st.sidebar.markdown(f"👤 {st.session_state.user_email}")
 
 if st.sidebar.button("Logout"):
     st.session_state.logged_in = False
     st.session_state.user_email = None
-    st.experimental_rerun()
+    st.rerun()
 
 page = st.sidebar.radio(
-    "Navigation",
+    "Navigate",
     ["📊 Dashboard", "🏃 Attendance", "⚠️ Risk Analysis", "📂 Raw Data"]
 )
 
@@ -105,56 +99,58 @@ page = st.sidebar.radio(
 # HEADER
 # =====================================================
 st.title("🏋️ FitInsight AI – Gym Analytics SaaS")
-st.write("Upload your gym Excel file to get instant business insights.")
 
 st.info(
-    "🔐 Data Privacy Notice\n\n"
-    "• Your data is processed temporarily\n"
-    "• Files are NOT stored permanently\n"
-    "• No data is shared with third parties"
+    "🔐 Data Privacy Notice\n"
+    "• Data is processed temporarily\n"
+    "• No files are stored\n"
+    "• No third-party sharing"
 )
 
 # =====================================================
-# FILE UPLOAD
+# FILE UPLOAD (CSV + EXCEL)
 # =====================================================
-uploaded_file = st.file_uploader("Upload Gym Excel File", type=["xlsx"])
+uploaded_file = st.file_uploader(
+    "Upload Gym Data (Excel or CSV)",
+    type=["xlsx", "csv"]
+)
 
 if not uploaded_file:
-    st.warning("⬆️ Please upload an Excel file to continue.")
+    st.warning("Upload a file to continue.")
     st.stop()
 
 # =====================================================
 # LOAD DATA
 # =====================================================
+def load_data(file, sheet=None):
+    if file.name.endswith(".csv"):
+        return pd.read_csv(file)
+    return pd.read_excel(file, sheet_name=sheet)
+
 try:
-    members = pd.read_excel(uploaded_file, sheet_name="members")
-    attendance = pd.read_excel(uploaded_file, sheet_name="attendance")
-    payments = pd.read_excel(uploaded_file, sheet_name="payments")
-except Exception:
-    st.error(
-        "❌ Excel format error\n\n"
-        "Required sheets:\n"
-        "- members\n- attendance\n- payments\n"
-        "All names must be lowercase."
-    )
+    if uploaded_file.name.endswith(".xlsx"):
+        members = load_data(uploaded_file, "members")
+        attendance = load_data(uploaded_file, "attendance")
+        payments = load_data(uploaded_file, "payments")
+    else:
+        members = load_data(uploaded_file)
+        attendance = pd.DataFrame()
+        payments = pd.DataFrame()
+except:
+    st.error("Invalid file format or missing sheets.")
     st.stop()
 
-st.success("✅ File uploaded successfully!")
+st.success("File uploaded successfully!")
 
 # =====================================================
-# REQUIRED COLUMNS (EXTRA COLUMNS SAFE)
+# REQUIRED COLUMNS
 # =====================================================
-REQUIRED_MEMBERS = ["member_id", "status", "plan_type", "trainer_name"]
-REQUIRED_PAYMENTS = ["member_id", "amount"]
+required_members = ["member_id", "status", "plan_type", "trainer_name"]
+required_payments = ["member_id", "amount"]
 
-for col in REQUIRED_MEMBERS:
+for col in required_members:
     if col not in members.columns:
-        st.error(f"Missing column in members sheet: {col}")
-        st.stop()
-
-for col in REQUIRED_PAYMENTS:
-    if col not in payments.columns:
-        st.error(f"Missing column in payments sheet: {col}")
+        st.error(f"Missing column: {col}")
         st.stop()
 
 # =====================================================
@@ -162,22 +158,23 @@ for col in REQUIRED_PAYMENTS:
 # =====================================================
 total_members = members["member_id"].nunique()
 active_members = members[members["status"] == "Active"]["member_id"].nunique()
-total_revenue = payments["amount"].sum()
-avg_revenue = round(total_revenue / total_members, 2)
+
+if not payments.empty:
+    total_revenue = payments["amount"].sum()
+else:
+    total_revenue = 0
+
+avg_revenue = round(total_revenue / total_members, 2) if total_members else 0
 
 # =====================================================
-# ATTENDANCE + RISK LOGIC
+# ATTENDANCE + RISK
 # =====================================================
-attendance_count = (
-    attendance.groupby("member_id")
-    .size()
-    .reset_index(name="visit_count")
-)
+if not attendance.empty:
+    visit_count = attendance.groupby("member_id").size().reset_index(name="visit_count")
+else:
+    visit_count = pd.DataFrame(columns=["member_id", "visit_count"])
 
-members_attendance = members.merge(
-    attendance_count, on="member_id", how="left"
-)
-
+members_attendance = members.merge(visit_count, on="member_id", how="left")
 members_attendance["visit_count"] = members_attendance["visit_count"].fillna(0)
 
 def risk_label(v):
@@ -185,13 +182,12 @@ def risk_label(v):
         return "High Risk"
     elif v <= 5:
         return "Medium Risk"
-    else:
-        return "Low Risk"
+    return "Low Risk"
 
 members_attendance["risk_level"] = members_attendance["visit_count"].apply(risk_label)
 
 # =====================================================
-# DASHBOARD PAGE
+# DASHBOARD
 # =====================================================
 if page == "📊 Dashboard":
     st.markdown("## 📊 Business Dashboard")
@@ -202,86 +198,75 @@ if page == "📊 Dashboard":
     k3.metric("Total Revenue (₹)", total_revenue)
     k4.metric("Avg Revenue / Member", avg_revenue)
 
-    revenue_by_plan = (
-        members.merge(payments, on="member_id")
-        .groupby("plan_type")["amount"]
-        .sum()
-        .reset_index()
+    st.markdown("---")
+
+    # Revenue by Plan
+    if not payments.empty:
+        rev_plan = members.merge(payments, on="member_id") \
+            .groupby("plan_type")["amount"].sum().reset_index()
+
+        st.plotly_chart(
+            px.bar(rev_plan, x="plan_type", y="amount",
+                   title="Revenue by Plan Type", text_auto=True),
+            use_container_width=True
+        )
+
+    # Status Distribution
+    status_df = members["status"].value_counts().reset_index()
+    status_df.columns = ["status", "count"]
+
+    st.plotly_chart(
+        px.pie(status_df, names="status", values="count",
+               title="Member Status Distribution", hole=0.5),
+        use_container_width=True
     )
 
-    fig_bar = px.bar(
-        revenue_by_plan,
-        x="plan_type",
-        y="amount",
-        title="Revenue by Plan Type",
-        text_auto=True
+    # Members by Trainer
+    trainer_df = members.groupby("trainer_name")["member_id"].nunique().reset_index()
+
+    st.plotly_chart(
+        px.bar(trainer_df, x="trainer_name", y="member_id",
+               title="Members by Trainer", text_auto=True),
+        use_container_width=True
     )
 
-    status_count = members["status"].value_counts().reset_index()
-    status_count.columns = ["status", "count"]
+    # Risk Distribution
+    risk_df = members_attendance["risk_level"].value_counts().reset_index()
+    risk_df.columns = ["risk_level", "count"]
 
-    fig_donut = px.pie(
-        status_count,
-        names="status",
-        values="count",
-        hole=0.5,
-        title="Member Status Distribution"
+    st.plotly_chart(
+        px.bar(risk_df, x="risk_level", y="count",
+               title="Risk Level Distribution", text_auto=True),
+        use_container_width=True
     )
-
-    col1, col2 = st.columns(2)
-    col1.plotly_chart(fig_bar, use_container_width=True)
-    col2.plotly_chart(fig_donut, use_container_width=True)
 
 # =====================================================
-# ATTENDANCE PAGE
+# ATTENDANCE
 # =====================================================
 elif page == "🏃 Attendance":
     st.markdown("## 🏃 Attendance Insights")
-    st.dataframe(
-        members_attendance[["member_id", "trainer_name", "visit_count"]]
-    )
+    st.dataframe(members_attendance[["member_id", "trainer_name", "visit_count"]])
 
-    csv = members_attendance[
-        ["member_id", "trainer_name", "visit_count"]
-    ].to_csv(index=False).encode("utf-8")
-
-    st.download_button(
-        "⬇️ Download Attendance Report (CSV)",
-        csv,
-        "attendance_report.csv",
-        "text/csv"
-    )
+    csv = members_attendance.to_csv(index=False).encode("utf-8")
+    st.download_button("Download Attendance CSV", csv, "attendance.csv", "text/csv")
 
 # =====================================================
-# RISK PAGE
+# RISK ANALYSIS
 # =====================================================
 elif page == "⚠️ Risk Analysis":
-    st.markdown("## ⚠️ High Risk Members")
-
-    high_risk = members_attendance[
-        members_attendance["risk_level"] == "High Risk"
-    ][["member_id", "visit_count", "risk_level"]]
-
-    st.dataframe(high_risk)
+    high_risk = members_attendance[members_attendance["risk_level"] == "High Risk"]
+    st.dataframe(high_risk[["member_id", "visit_count", "risk_level"]])
 
     csv = high_risk.to_csv(index=False).encode("utf-8")
-
-    st.download_button(
-        "⬇️ Download High Risk Members (CSV)",
-        csv,
-        "high_risk_members.csv",
-        "text/csv"
-    )
+    st.download_button("Download High Risk CSV", csv, "high_risk.csv", "text/csv")
 
 # =====================================================
-# RAW DATA PAGE
+# RAW DATA
 # =====================================================
 elif page == "📂 Raw Data":
-    tab1, tab2, tab3 = st.tabs(["Members", "Attendance", "Payments"])
-    with tab1:
-        st.dataframe(members)
-    with tab2:
+    st.dataframe(members)
+    if not attendance.empty:
         st.dataframe(attendance)
-    with tab3:
+    if not payments.empty:
         st.dataframe(payments)
 
